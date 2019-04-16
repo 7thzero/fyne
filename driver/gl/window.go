@@ -179,9 +179,26 @@ func (w *window) Icon() fyne.Resource {
 
 func (w *window) SetIcon(icon fyne.Resource) {
 	w.icon = icon
+	if icon == nil {
+		appIcon := fyne.CurrentApp().Icon()
+		if appIcon != nil {
+			w.SetIcon(appIcon)
+		}
+		return
+	}
+
+	pix, _, err := image.Decode(bytes.NewReader(icon.Content()))
+	if err != nil {
+		fyne.LogError("Failed to decode image for window icon", err)
+		return
+	}
+
+	w.viewport.SetIcon([]image.Image{pix})
 }
 
 func (w *window) fitContent() {
+	w.canvas.Lock()
+	defer w.canvas.Unlock()
 	if w.canvas.content == nil {
 		return
 	}
@@ -204,19 +221,19 @@ func (w *window) SetOnClosed(closed func()) {
 }
 
 func scaleForDpi(xdpi int) float32 {
-	if xdpi > 1000 { // assume that this is a mistake and bail
+	switch {
+	case xdpi > 1000:
+		// assume that this is a mistake and bail
+		return float32(1.0)
+	case xdpi > 192:
+		return float32(1.5)
+	case xdpi > 144:
+		return float32(1.35)
+	case xdpi > 120:
+		return float32(1.2)
+	default:
 		return float32(1.0)
 	}
-
-	if xdpi > 192 {
-		return float32(1.5)
-	} else if xdpi > 144 {
-		return float32(1.35)
-	} else if xdpi > 120 {
-		return float32(1.2)
-	}
-
-	return float32(1.0)
 }
 
 func (w *window) getMonitorForWindow() *glfw.Monitor {
@@ -307,7 +324,7 @@ func (w *window) resize(size fyne.Size) {
 	}
 
 	w.canvas.content.Resize(size)
-	w.canvas.setDirty(true)
+	w.canvas.Refresh(w.canvas.content)
 }
 
 func (w *window) SetContent(content fyne.CanvasObject) {
@@ -688,6 +705,9 @@ func keyToName(key glfw.Key) fyne.KeyName {
 
 func (w *window) keyPressed(viewport *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods glfw.ModifierKey) {
 	keyName := keyToName(key)
+	if keyName == "" {
+		return
+	}
 	keyEvent := &fyne.KeyEvent{Name: keyName}
 
 	if action == glfw.Press {
@@ -734,7 +754,7 @@ func (w *window) keyPressed(viewport *glfw.Window, key glfw.Key, scancode int, a
 			}
 		}
 	}
-	if keyDesktopModifier != 0 {
+	if shortcut == nil && keyDesktopModifier != 0 {
 		shortcut = &desktop.CustomShortcut{
 			KeyName:  keyName,
 			Modifier: keyDesktopModifier,
@@ -822,12 +842,6 @@ func (d *gLDriver) CreateWindow(title string) fyne.Window {
 		}
 		win.MakeContextCurrent()
 
-		iconRes := fyne.CurrentApp().Icon()
-		if iconRes != nil {
-			icon, _, _ := image.Decode(bytes.NewReader(iconRes.Content()))
-			win.SetIcon([]image.Image{icon})
-		}
-
 		if master {
 			err := gl.Init()
 			if err != nil {
@@ -843,6 +857,7 @@ func (d *gLDriver) CreateWindow(title string) fyne.Window {
 		ret.padded = true
 		ret.canvas.SetScale(ret.detectScale())
 		ret.canvas.texScale = 1.0
+		ret.SetIcon(ret.icon) // if this is nil we will get the app icon
 		d.windows = append(d.windows, ret)
 
 		win.SetCloseCallback(ret.closed)
